@@ -1,14 +1,16 @@
-name: Java CI with Maven
+name: Java CI/CD with Maven
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "master" ]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -25,15 +27,45 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Build and test with Maven
-        run: mvn -B clean verify
+      - name: Build and test
+        run: mvn -B clean package
 
-      - name: Upload artifacts
-        if: always()
+      - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
-          path: |
-            target/*.jar
-            target/surefire-reports/
-          if-no-files-found: warn
+          name: app-jar
+          path: target/demo-github-actions-1.0.0-SNAPSHOT.jar
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Download jar
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: dist
+
+      - name: Copy jar to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_KEY }}
+          port: ${{ secrets.VDS_PORT }}
+          source: "dist/demo-github-actions-1.0.0-SNAPSHOT.jar"
+          target: "/opt/demo-github-actions/"
+
+      - name: Restart app on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_KEY }}
+          port: ${{ secrets.VDS_PORT }}
+          script: |
+            mv /opt/demo-github-actions/demo-github-actions-1.0.0-SNAPSHOT.jar /opt/demo-github-actions/app.jar || true
+            sudo systemctl restart demo-github-actions
+            sudo systemctl status demo-github-actions --no-pager
